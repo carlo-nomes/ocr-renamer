@@ -10,13 +10,13 @@ from pdf2image.exceptions import (
 )
 
 # Constants
-TEMP_DIR = tempfile.mkdtemp()
+OUTPUT_DIR = tempfile.mkdtemp()
 
 LOG_FORMAT = "%(levelname)s: %(asctime)s - %(message)s"
-PREPROCESS_SUCCESS = "Preprocessed images saved at: {}"
+CONVERSION_SUCCESS = "PDF file has been converted to images. Images are saved in: {}"
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT)
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger()
 
 
@@ -40,11 +40,12 @@ def main(pdf_path: str):
 
     # Save the images to a temporary directory
     for i, image in enumerate(images):
-        image_path = os.path.join(TEMP_DIR, f"page_{i + 1}.png")
+        image_path = os.path.join(OUTPUT_DIR, f"page_{i + 1}.png")
         image.save(image_path, "PNG")
         logger.debug(f"Saved image: {image_path}")
 
-    logger.info(PREPROCESS_SUCCESS.format(TEMP_DIR))
+    logger.info(CONVERSION_SUCCESS.format(OUTPUT_DIR))
+    print(OUTPUT_DIR)  # This is the output of the script
 
 
 if __name__ == "__main__":
