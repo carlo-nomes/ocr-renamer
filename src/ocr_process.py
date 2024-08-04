@@ -277,32 +277,30 @@ def draw_bounding_boxes(
     return image
 
 
-def preprocess_image(image: Image) -> Image:
+def preprocess_image(img: Image) -> Image:
     """Preprocess an image for OCR."""
+    # Convert to numpy array
+    img = np.array(img)
 
-    # Convert to grayscale
-    numpy_array_image = np.array(image)
-    # Check if image is RGB
-    if len(numpy_array_image.shape) == 3 and numpy_array_image.shape[2] == 3:
-        gray_np_image = cv2.cvtColor(numpy_array_image, cv2.COLOR_BGR2GRAY)
-    else:
-        gray_np_image = numpy_array_image
+    # Rescale the image, if needed.
+    img = cv2.resize(img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
 
-    # Apply bilateral filter to reduce noise while keeping edges sharp
-    filtered = cv2.bilateralFilter(gray_np_image, 9, 75, 75)
+    # Convert to grayscale if the image is in color
+    if len(img.shape) == 3 and img.shape[2] == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    # Apply adaptive thresholding
-    thresh = cv2.adaptiveThreshold(
-        filtered,
-        255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        11,
-        2,
-    )
+    # Apply dilation and erosion to remove some noise
+    kernel = np.ones((1, 1), np.uint8)
+    # increases the white region in the image
+    img = cv2.dilate(img, kernel, iterations=1)
+    # erodes away the boundaries of foreground object
+    img = cv2.erode(img, kernel, iterations=1)
+
+    # Apply threshold to get image with only b&w (binarization)
+    img = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
 
     # Convert back to Pillow image
-    return Image.fromarray(thresh)
+    return Image.fromarray(img)
 
 
 def main(image_dir: str, output_dir: str):
