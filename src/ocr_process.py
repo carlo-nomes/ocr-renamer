@@ -1,12 +1,13 @@
-import os
-import sys
+import json
 import logging
-import pytesseract
+import os
+import subprocess
+import sys
+import tempfile
+
 import cv2
 import numpy as np
-import tempfile
-import subprocess
-import json
+import pytesseract
 from PIL import Image, ImageDraw, ImageFont
 
 # Constants for configuration
@@ -21,9 +22,9 @@ DEFAULT_BOX_COLOR = "blue"  # Color of bounding boxes
 LINE_THICKNESS = 5  # Thickness of bounding box lines
 
 # Maximum gap between characters to consider them part of the same word
-MAX_X_GAP = 0.80
+MAX_X_GAP = 0.50
 # Minimum vertical overlap between characters to consider them part of the same word
-MIN_Y_OVERLAP = 0.5
+MIN_Y_OVERLAP = 0.3
 
 # Edge distances for bounding boxes
 MIN_EDGE_DISTANCE = 5
@@ -103,32 +104,6 @@ def get_x_gap(box1: tuple, box2: tuple) -> int:
     return gap / total_width
 
 
-def is_overlapping(box1: tuple, box2: tuple) -> bool:
-    """Check if two bounding boxes overlap significantly."""
-    x0_1, y0_1, x1_1, y1_1, *_ = box1
-    x0_2, y0_2, x1_2, y1_2, *_ = box2
-
-    # Calculate the area of the two bounding boxes
-    area1 = (x1_1 - x0_1) * (y1_1 - y0_1)
-    area2 = (x1_2 - x0_2) * (y1_2 - y0_2)
-
-    # Calculate the area of the intersection
-    x0 = max(x0_1, x0_2)
-    y0 = max(y0_1, y0_2)
-    x1 = min(x1_1, x1_2)
-    y1 = min(y1_1, y1_2)
-    intersection_area = max(0, x1 - x0) * max(0, y1 - y0)
-
-    # Calculate the area of the union
-    union_area = area1 + area2 - intersection_area
-
-    # Calculate the intersection over union (IoU)
-    iou = intersection_area / union_area
-    logger.debug(f"IoU: {iou}")
-
-    return iou > 0.1
-
-
 def ocr_boxes(image: Image) -> list:
     """Perform OCR on the given image and return bounding boxes."""
     custom_config = r"--oem 3 --psm 6"
@@ -140,7 +115,8 @@ def ocr_boxes(image: Image) -> list:
 def ocr_words(image: Image) -> list:
     """Perform OCR on the given image and return words."""
     custom_config = r"--oem 3 --psm 6"
-    words = pytesseract.image_to_string(image, config=custom_config)
+    # Custom config for Dutch language
+    words = pytesseract.image_to_string(image, config=custom_config, lang="nld")
     return words
 
 
@@ -323,16 +299,23 @@ def main(image_dir: str):
             os.makedirs(output_subdir, exist_ok=True)
 
             # Load image
-            image = Image.open(image_path)
-            image_width = image.width
-            image_height = image.height
+            original_image = Image.open(image_path)
+            image_width = original_image.width
+            image_height = original_image.height
+
+            # Create a copy of the image to the output directory
+            original_image_path = os.path.join(output_subdir, "original.png")
+            original_image.save(original_image_path)
+
+            # Create a copy of the image with bounding boxes
+            boxed_image = original_image.copy()
 
             # Perform OCR and get character bounding boxes
-            boxes = ocr_boxes(image)
+            boxes = ocr_boxes(original_image)
             logger.debug(f"Found {len(boxes)} bounding boxes.")
 
             # Draw character bounding boxes on the image
-            boxed_image = draw_bounding_boxes(image, boxes, "red", True)
+            boxed_image = draw_bounding_boxes(boxed_image, boxes, "red", True)
 
             # Filter out very large and very small bounding boxes
             boxes = filter_bounding_boxes(boxes, image_width, image_height)
@@ -354,57 +337,66 @@ def main(image_dir: str):
             # Save image with bounding boxes
             boxed_image_path = os.path.join(output_subdir, f"boxes.png")
             boxed_image.save(boxed_image_path)
-            logger.debug(f"Annotated image saved at: {boxed_image_path}")
+            logger.debug(f"Boxed image saved at: {boxed_image_path}")
 
             # Run OCR on the bounding boxes
             results = []
             for j, box in enumerate(boxes):
                 # Crop the bounding box from the image
-                x0, y0, x1, y1 = convert_box_to_pillow(image, box)
-                cropped_image = image.crop((x0, y1, x1, y0))
+                x0, y0, x1, y1 = convert_box_to_pillow(original_image, box)
+                cropped_image = original_image.crop((x0, y1, x1, y0))
 
                 # Preprocess the cropped image
-                processed_image = preprocess_image(cropped_image)
+                # cropped_image = preprocess_image(cropped_image)
 
                 # Run OCR on the processed image
-                words = ocr_words(processed_image)
+                words = ocr_words(cropped_image)
 
                 # Draw OCR output on the image
-                draw = ImageDraw.Draw(processed_image)
-                draw.text((10, 10), words, fill="red")
+                draw_cropped = ImageDraw.Draw(cropped_image)
+                draw_cropped.text(
+                    xy=(10, 10),
+                    text=words,
+                    fill="red",
+                    font=ImageFont.load_default(35),
+                    align="left",
+                )
 
                 # Save OCR image
-                processed_image_path = os.path.join(output_subdir, f"box_{j}.png")
-                processed_image.save(processed_image_path)
-                logger.debug(f"Processed image saved at: {processed_image_path}")
+                cropped_image_path = os.path.join(output_subdir, f"box_{j}.png")
+                cropped_image.save(cropped_image_path)
+                logger.debug(f"Processed image saved at: {cropped_image_path}")
 
                 # Save OCR results
-                results.append((processed_image_path, box, words))
+                results.append((cropped_image_path, box, words))
 
             # Create a structured metadata file for the OCR results
             metadata_path = os.path.join(output_subdir, "metadata.json")
-            mapped_results = [
-                {
-                    # Relative path to the image
-                    "image_path": os.path.relpath(path, output_subdir),
-                    # Convert box to dictionary for JSON serialization
-                    "box": {"x0": box[0], "y0": box[1], "x1": box[2], "y1": box[3]},
-                    # Remove newlines and extra spaces
-                    "text": words.replace("\n", " ").strip(),
-                }
-                for path, box, words in results
-            ]
-            metadata = {"image_path": image_path, "results": mapped_results}
+            metadata = {
+                # Original image path
+                "original_image": os.path.relpath(original_image_path, output_subdir),
+                # Relative path to the boxed image
+                "boxed_image": os.path.relpath(boxed_image_path, output_subdir),
+                # OCR results
+                "boxes": [
+                    {
+                        # Relative path to the image
+                        "image_path": os.path.relpath(path, output_subdir),
+                        # Convert box to dictionary for JSON serialization
+                        "box": {"x0": box[0], "y0": box[1], "x1": box[2], "y1": box[3]},
+                        # Remove newlines and extra spaces
+                        "text": words.replace("\n", " ").strip(),
+                    }
+                    for path, box, words in results
+                ],
+            }
             with open(metadata_path, "w") as f:
                 json.dump(metadata, f, indent=4)
 
             logger.info(f"Processed image {i}/{max_index}, saved at: {output_subdir}")
 
         logger.info(OCR_SUCCESS.format(OUTPUT_DIR))
-        print(OUTPUT_DIR)  # This is the output of the script
-
-        # Open the output directory in Finder
-        subprocess.run(["open", OUTPUT_DIR])
+        return OUTPUT_DIR
 
     except Exception as e:
         logger.error(f"Error: {e}")
@@ -412,7 +404,16 @@ def main(image_dir: str):
 
 
 if __name__ == "__main__":
-    # Read the image directory path from standard input
-    image_dir = sys.stdin.read().strip()
+    # Read the image directory path from standard input or command line arguments
+    if len(sys.argv) != 2:
+        logger.error("Usage: python ocr_process.py <path_to_images>")
+        sys.exit(1)
 
-    main(image_dir)
+    image_dir = sys.argv[1]
+    logger.info(f"Processing images in: {image_dir}")
+
+    output = main(image_dir)
+    print(output)  # This is the output of the script
+
+    # Use MacOS Preview to open the annotated images
+    subprocess.run(["open", output])
