@@ -7,13 +7,11 @@ from datetime import datetime
 
 from collections import Counter
 import re
+import argparse
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger()
-
-
-from dateutil import parser
 
 
 def find_transaction_date(boxes):
@@ -198,7 +196,7 @@ def get_target_filename(image_path, company_name, transaction_date, target_dir):
         normalized_company_name = normalize_company_name(company_name)
         new_filename = f"{transaction_date}-{normalized_company_name}{ext}"  # Adjusted format to YYYY_MM_DD-Company
     else:
-        new_filename = f"unidentified_{os.path.basename(image_path)}"
+        new_filename = f"unkown-date_{os.path.basename(image_path)}"
 
     # Ensure the target directory exists
     os.makedirs(target_dir, exist_ok=True)
@@ -207,7 +205,7 @@ def get_target_filename(image_path, company_name, transaction_date, target_dir):
 
 
 # Function to process all metadata files and rename the corresponding images
-def process_metadata(metadata_dir, image_dir, target_dir):
+def process_metadata(metadata_dir, target_dir):
     # Ensure the target directory exists
     os.makedirs(target_dir, exist_ok=True)
 
@@ -248,7 +246,6 @@ def process_metadata(metadata_dir, image_dir, target_dir):
 
 
 if __name__ == "__main__":
-    import argparse
 
     # Set up argument parsing for command-line use
     parser = argparse.ArgumentParser(
@@ -258,13 +255,10 @@ if __name__ == "__main__":
         "metadata_dir", type=str, help="Directory containing the metadata JSON files"
     )
     parser.add_argument(
-        "image_dir", type=str, help="Directory containing the image files"
-    )
-    parser.add_argument(
         "target_dir", type=str, help="Directory to copy the renamed images to"
     )
 
     args = parser.parse_args()
 
     # Process the metadata files and copy renamed images to target directory
-    process_metadata(args.metadata_dir, args.image_dir, args.target_dir)
+    process_metadata(args.metadata_dir, args.target_dir)
