@@ -1,0 +1,42 @@
+total
+subtotal
+amount
+invoice
+date
+quantity
+item
+description
+payment
+reference
+delivery
+order
+customer
+vat
+discount
+net
+gross
+address
+phone
+email
+country
+postcode
+city
+state
+due date
+invoice number
+debtor
+creditor
+account number
+tax
+balance
+amazon
+walmart
+target
+home depot
+best buy
+bread
+milk
+cheese
+meat
+vegetables
+fruits

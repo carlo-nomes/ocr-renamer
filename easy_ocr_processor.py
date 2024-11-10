@@ -173,7 +173,6 @@ def run_easy_ocr(input_image_path: str) -> list[dict]:
 
 # Preprocessing functionality
 
-
 # Constants for preprocessing
 RESCALE_FACTOR = 1.5  # Factor by which the image will be rescaled
 DILATION_ITERATIONS = 1  # Number of times dilation is applied to the image
@@ -259,17 +258,22 @@ def preprocess_image(image: Image) -> Image:
 
 
 # Main processing function
-
-
-def process_image(input_image_path: str, output_image_dir: str, metadata_dir: str):
+def process_image(input_image_path: str, output_dir: str):
     """Process the image with OCR and save the results."""
     try:
-        # Open the image
-        input_image = Image.open(input_image_path)
-        logger.info(f"Processing image format: {input_image.format}")
+        # Open the image and get additional information
+        input_img = Image.open(input_image_path)
+        input_img_name = os.path.splitext(os.path.basename(input_image_path))[0]
 
-        # Image name without extension
-        img_name = os.path.splitext(os.path.basename(input_image_path))[0]
+        # Load the metadata for the input image if available
+        original_metadata = {}
+        input_metadata_path = os.path.join(os.path.dirname(input_image_path), f"{input_img_name}.metadata.json")
+        if os.path.exists(input_metadata_path):
+            with open(input_metadata_path, "r") as f:
+                original_metadata = json.load(f)
+            logger.info(f"Loaded metadata from: {input_metadata_path}")
+        else:
+            logger.warning(f"No metadata found for image: {input_image_path}")
 
         # TODO: Experiment with values, currently reduces OCR accuracy
         # Preprocess the image before OCR and save it
@@ -283,19 +287,20 @@ def process_image(input_image_path: str, output_image_dir: str, metadata_dir: st
         logger.info(f"Found {len(boxes)} OCR results in image: {input_image_path}")
 
         # Draw bounding boxes on the image and save it
-        boxed_image = draw_boxes(input_image, boxes)
-        boxed_image_path = os.path.join(output_image_dir, f"{img_name}.boxed.png")
+        boxed_image = draw_boxes(input_img, boxes)
+        boxed_image_path = os.path.join(output_dir, f"{input_img_name}.boxed.png")
         boxed_image.save(boxed_image_path)
         logger.info(f"Boxed image saved to: {boxed_image_path}")
 
         # Save metadata to a JSON file with the OCR results
         metadata = {
             "original_image": input_image_path,
+            "original_metadata": original_metadata,
             # "preprocessed_image": preprocessed_path,
             "boxed_image": boxed_image_path,
             "boxes": boxes,
         }
-        metadata_path = os.path.join(metadata_dir, f"{img_name}.json")
+        metadata_path = os.path.join(output_dir, f"{input_img_name}.metadata.json")
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=4)
         logger.info(f"Metadata saved to: {metadata_path}")
@@ -303,7 +308,7 @@ def process_image(input_image_path: str, output_image_dir: str, metadata_dir: st
     except Exception as e:
         logger.error(f"Error processing image '{input_image_path}': {e}")
     finally:
-        input_image.close()  # Ensure original image is closed after processing
+        input_img.close()  # Ensure original image is closed after processing
         # preprocessed_image.close()  # Ensure preprocessed image is closed after processing
         boxed_image.close()  # Ensure boxed image is closed after processing
 
@@ -311,46 +316,19 @@ def process_image(input_image_path: str, output_image_dir: str, metadata_dir: st
 MAX_CONCURRENT_WORKERS = 4
 
 
-def main(input_path: str, output_path: str | None, clean: bool = False):
+def main(input_path: str, output_path: str = tempfile.mkdtemp(), clean: bool = False):
     """Main function to handle OCR processing and save results."""
 
-    # Create the output directory if it does not exist
-    if output_path is None:
-        output_path = tempfile.mkdtemp()
-    else:
-        os.makedirs(output_path, exist_ok=True)
+    os.makedirs(output_path, exist_ok=True)
 
-    if not os.path.isdir(output_path):
-        logger.error(f"The path {output_path} is not a directory.")
-        raise NotADirectoryError(f"The path {output_path} is not a directory.")
-
-    # Set up output directory for boxed images
-    image_output_dir = os.path.join(output_path, "boxed_images")
-    os.makedirs(image_output_dir, exist_ok=True)
+    # Clean the output directory if requested
     if clean:
-        for filename in os.listdir(image_output_dir):
-            file_path = os.path.join(image_output_dir, filename)
-            try:
-                if os.path.isfile(file_path):
-                    os.unlink(file_path)
-            except Exception as e:
-                logger.error(f"Failed to delete {file_path}. Reason: {e}")
-    logger.info(f"Initalized output directory: {image_output_dir}")
-
-    # Set up output directory for metadata
-    metadata_dir = os.path.join(output_path, "metadata")
-    os.makedirs(metadata_dir, exist_ok=True)
-    if clean:
-        for filename in os.listdir(metadata_dir):
-            file_path = os.path.join(metadata_dir, filename)
-            try:
-                if os.path.isfile(file_path):
-                    os.unlink(file_path)
-            except Exception as e:
-                logger.error(f"Failed to delete {file_path}. Reason: {e}")
-    logger.info(f"Initalized metadata directory: {metadata_dir}")
+        for f in os.listdir(output_path):
+            os.remove(os.path.join(output_path, f))
+        logger.info(f"Cleaned output directory: {output_path}")
 
     # Load images from the input directory or file
+    input_images = []
     if os.path.isfile(input_path):
         input_images = [input_path]
     elif os.path.isdir(input_path):
@@ -361,7 +339,7 @@ def main(input_path: str, output_path: str | None, clean: bool = False):
     max_workers = min(MAX_CONCURRENT_WORKERS, len(input_images))
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for input_image_path in input_images:
-            executor.submit(process_image, input_image_path, image_output_dir, metadata_dir)
+            executor.submit(process_image, input_image_path, output_path)
     logger.info("OCR processing complete.")
 
 
@@ -369,7 +347,7 @@ if __name__ == "__main__":
     # Set up argument parsing for command-line use
     parser = argparse.ArgumentParser(description="Perform OCR on images and save results in separate directories.")
     parser.add_argument("input_dir", type=str, help="Directory containing images to process.")
-    parser.add_argument("--output_dir", type=str, default="output_images", help="Directory to save the processed images.")
+    parser.add_argument("output_dir", type=str, nargs="?", default=None, help="Directory to save processed images and metadata.")
     parser.add_argument("--clean", action="store_true", help="Clean the output directory before processing.")
     args = parser.parse_args()
 
