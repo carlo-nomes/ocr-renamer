@@ -84,9 +84,9 @@ def get_candidate_words(token: str) -> list[str]:
     # Find candidate words by length
     token_length = len(token)
     candidates = []
-    for length in range(token_length - WORD_LENGTH_TOLERANCE, token_length + WORD_LENGTH_TOLERANCE + 1):
-        # Check each language
-        for lang in LANGUAGES:
+    # Check each language
+    for lang in LANGUAGES:
+        for length in range(token_length - WORD_LENGTH_TOLERANCE, token_length + WORD_LENGTH_TOLERANCE + 1):
             if length in GROUPED_DICTIONARIES[lang]:
                 candidates.extend(GROUPED_DICTIONARIES[lang][length])
 
@@ -100,6 +100,18 @@ def sanitize_text(text: str) -> str:
     # Replace non-word characters with spaces
     text = re.sub(r"[^\w\s]", " ", text)
     # Replace multiple whitespace characters with a single space
+    text = re.sub(r"\s+", " ", text)
+    # Remove leading and trailing whitespace
+    text = text.strip()
+    return text
+
+
+def sanitize_digit_text(text: str) -> str:
+    """Sanitize text containing only digits."""
+    # Remove whitespace before and after non-digit characters
+    text = re.sub(r"\s+(\D)", r"\1", text)
+    text = re.sub(r"(\D)\s+", r"\1", text)
+    # Remove multiple whitespace characters
     text = re.sub(r"\s+", " ", text)
     # Remove leading and trailing whitespace
     text = text.strip()
@@ -138,7 +150,7 @@ def get_all_splits(token: str) -> list[list[str]]:
     return all_splits
 
 
-def find_best_match(alternatives: list[str]) -> str:
+def find_best_match(original: str, alternatives: list[str]) -> str:
     """Find the best match for a text token in the dictionary."""
 
     best_match_text = None
@@ -149,35 +161,45 @@ def find_best_match(alternatives: list[str]) -> str:
     for alternative in alternatives:
         alternative_splits = get_all_splits(alternative)
         all_splits.extend(alternative_splits)
+    logger.debug(f"Generated {len(all_splits)} split combinations for '{original}'")
 
     for split_combination in all_splits:
         split_distance_sum = 0
         split_candidates = []
         for split in split_combination:
-            # If the split consists of only digits or whitespace, or is too short, add it to the list and update the total distance
-            if re.match(r"^[\d\s]+$", split) or len(split) < 3:
+            # Skip splits that consist of only digits or whitespace or punctuation
+            if re.match(r"^[\d\s\W]+$", split):
                 split_candidates.append(split)
-                split_distance_sum += len(split)
+                split_distance_sum += 0  # Do not penalize digit splits
+                logger.debug(f"Skipping split '{split}' with only digits, whitespace, or punctuation")
+                continue
+
+            # Skip splits that are too short
+            if len(split) < 3:
+                split_candidates.append(split)
+                split_distance_sum += len(split)  # Penalize short splits
+                logger.debug(f"Skipping split '{split}' that is too short")
                 continue
 
             # Find candidate words in the dictionary
             candidates = get_candidate_words(split)
-            # logger.debug(f"Found {len(candidates)} candidates for '{sanitized_split}'")
+            logger.debug(f"Found {len(candidates)} candidates for split '{split}'")
 
             # Find the best match for the split in the dictionary, based on Levenshtein distance and length difference
             best_candidate = None
             best_candidate_distance = float("inf")
             best_candidate_char_count_difference = float("inf")
             for candidate in candidates:
-                distance = levenshtein(split, candidate)
+                # Calculate the Levenshtein distance between the split and the candidate in lowercase
+                distance = levenshtein(split, candidate.lower())
                 char_count_difference = abs(len(split) - len(candidate))
-
-                # If the distance is higher than the threshold, skip this candidate
-                if distance > best_candidate_distance:
-                    continue
 
                 # If the distance is larger than the threshold, skip this candidate
                 if distance > DISTANCE_THRESHOLD:
+                    continue
+
+                # If the distance is higher than the current best match, skip this candidate
+                if distance > best_candidate_distance:
                     continue
 
                 # If the distance is lower than the current best match, update the best match
@@ -187,7 +209,7 @@ def find_best_match(alternatives: list[str]) -> str:
                     best_candidate_char_count_difference = char_count_difference
                     continue
 
-                # If the distance is equal, check the length difference
+                # If the distance is equal, check the length difference to the split
                 if char_count_difference < best_candidate_char_count_difference:
                     best_candidate = candidate
                     best_candidate_distance = distance
@@ -197,31 +219,38 @@ def find_best_match(alternatives: list[str]) -> str:
             # If no candidate was found, add the split to the list and update the total distance
             if not best_candidate:
                 split_candidates.append(split)
-                split_distance_sum += len(split)
+                split_distance_sum += len(split)  # Penalize splits that are not in the dictionary
+                logger.debug(f"No candidate found for split '{split}'")
                 continue
 
             # Add the best candidate to the list and update the total distance
             split_candidates.append(best_candidate)
             split_distance_sum += best_candidate_distance
+            logger.debug(f"Found best candidate '{best_candidate}' for split '{split}'")
 
-        split_char_count_difference = abs(len(alternatives) - len(" ".join(split_candidates)))
+        # Calculate the total character count difference for the split combination
+        split_match_text = " ".join(split_candidates)
+        split_char_count_difference = abs(len(original) - len(split_match_text))
 
         # If the total distance is higher than the current best match, skip this split combination
         if split_distance_sum > lowest_total_distance:
+            logger.debug(f"Skipping split combination '{split_candidates}' with distance {split_distance_sum}")
             continue
 
         # If the total distance is lower than the current best match, update the best match
         if split_distance_sum < lowest_total_distance:
-            best_match_text = " ".join(split_candidates)
+            best_match_text = split_match_text
             lowest_total_distance = split_distance_sum
             char_count_difference = split_char_count_difference
+            logger.debug(f"Found new best match '{best_match_text}' with distance {split_distance_sum}")
             continue
 
         # If the total distance is equal, check the length difference
         if split_char_count_difference < char_count_difference:
-            best_match_text = " ".join(split_candidates)
+            best_match_text = split_match_text
             lowest_total_distance = split_distance_sum
             char_count_difference = split_char_count_difference
+            logger.debug(f"Found new best match '{best_match_text}' with distance {split_distance_sum}")
             continue
 
     return best_match_text
@@ -251,33 +280,39 @@ def find_ocr_mistakes(token: str) -> list[str]:
     return alternatives
 
 
-MAX_CONCURRENT_WORKERS = 4
+MAX_CONCURRENT_WORKERS = 1
 
 
 def text_normalization(text: str) -> str:
     # Skip text normalization if the text is empty
     if not text:
+        logger.debug(f"Skipping text normalization for empty text")
         return text
 
-    # Skip text normalization if the text consists of only digits or whitespace, or is too short
-    if re.match(r"^[\d\s]+$", text) or len(text) < 3:
-        return text
+    # Skip dictionary lookup if the text is only digits, whitespace, or punctuation
+    if re.match(r"^[\d\s\W]+$", text):
+        logger.debug(f"Skipping dictionary lookup for digit text: '{text}'")
+        return sanitize_digit_text(text)
 
     # Correct common OCR mistakes (give a list of alternatives)
     ocr_alternatives = find_ocr_mistakes(text)
+    logger.debug(f"Found {len(ocr_alternatives)} OCR alternatives for '{text}'")
 
     # Sanitize the text for processing
     ocr_alternatives = [sanitize_text(alt) for alt in ocr_alternatives]
+    logger.debug(f"Sanitized {len(ocr_alternatives)} OCR alternatives for '{text}'")
 
     # Remove duplicates
     ocr_alternatives = list(set(ocr_alternatives))
+    logger.debug(f"Removed duplicates, {len(ocr_alternatives)} alternatives left for '{text}'")
 
     # Remove empty strings
     ocr_alternatives = [alt for alt in ocr_alternatives if alt]
+    logger.debug(f"Removed empty strings, {len(ocr_alternatives)} alternatives left for '{text}'")
 
     # Perform fuzzy search on the dictionary
-    normalized_text = find_best_match(ocr_alternatives)
-    logger.debug(f"Normalized text: '{normalized_text}'")
+    normalized_text = find_best_match(text, ocr_alternatives)
+    logger.debug(f"Found best match for '{text}': '{normalized_text}'")
 
     return normalized_text
 
@@ -287,11 +322,18 @@ def process_metadata(metadata_file: str, output_path: str):
         metadata = json.load(f)
     logger.info(f"Processing metadata file: {metadata_file}")
 
+    assert "boxes" in metadata, f"Metadata file does not contain 'boxes' key: {metadata_file}"
+    assert type(metadata["boxes"]) == list, f"Metadata file 'boxes' key is not a list: {metadata_file}"
+    assert all(type(box) == dict for box in metadata["boxes"]), f"Metadata file 'boxes' key contains non-dictionary elements: {metadata_file}"
+    assert all("text" in box for box in metadata["boxes"]), f"Metadata file 'boxes' key contains elements without 'text' key: {metadata_file}"
+    assert all(
+        type(box["text"]) == str for box in metadata["boxes"]
+    ), f"Metadata file 'boxes' key contains elements with non-string 'text' key: {metadata_file}"
+
+    # Normalize the text in each box
     for box in metadata["boxes"]:
-        if "text" in box and type(box["text"]) == str:
-            box["normalized_text"] = text_normalization(box["text"])
-        else:
-            raise ValueError(f"Text box in metadata is not a string: {box}")
+        box["normalized_text"] = text_normalization(box["text"])
+    logger.info(f"Normalized text in {len(metadata['boxes'])} boxes")
 
     # Save the processed text to a new metadata file
     output_metadata_file = os.path.join(output_path, os.path.basename(metadata_file))
