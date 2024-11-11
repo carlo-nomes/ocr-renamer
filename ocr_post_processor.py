@@ -1,23 +1,28 @@
+# Standard library imports
 import argparse
-import json
 import csv
+import json
 import logging
 import os
 import re
 import tempfile
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from itertools import combinations
 
+
+# Third-party imports
 from Levenshtein import distance as levenshtein
 
 # Constants for configuration
 LOG_FORMAT = "%(levelname)s: %(asctime)s - %(message)s"
 
-LANGUAGES = ["en", "nl"]
+LANGUAGES = ["en", "nl", "companies"]
 
 
 # Configure logging
-logging.basicConfig(level=logging.DEBUG, format=LOG_FORMAT)
+logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
 logger = logging.getLogger()
 
 
@@ -60,16 +65,11 @@ for lang in LANGUAGES:
 def preprocess_dictionary(dictionary: set) -> dict:
     """
     Preprocess the dictionary to group words by their lengths.
-    :param dictionary: A set of words.
-    :return: A dictionary with word lengths as keys and words as values.
     """
-    length_groups = {}
+    length_groups = defaultdict(list)
     for word in dictionary:
-        length = len(word)
-        if length not in length_groups:
-            length_groups[length] = []
-        length_groups[length].append(word)
-    return length_groups
+        length_groups[len(word)].append(word)
+    return dict(length_groups)
 
 
 GROUPED_DICTIONARIES = {lang: preprocess_dictionary(DICTIONARIES[lang]) for lang in LANGUAGES}
@@ -93,74 +93,161 @@ def get_candidate_words(token: str) -> list[str]:
     return candidates
 
 
+@lru_cache(maxsize=None)
+def get_best_candidate(token: str) -> str:
+    candidates = get_candidate_words(token)
+    best_candidate = None
+    best_candidate_distance = float("inf")
+    best_candidate_char_count_difference = float("inf")
+    for candidate in candidates:
+        # Calculate the Levenshtein distance between the split and the candidate in lowercase
+        distance = levenshtein(token, candidate.lower())
+        char_count_difference = abs(len(token) - len(candidate))
+
+        # If the distance is larger than the threshold, skip this candidate
+        if distance > DISTANCE_THRESHOLD:
+            continue
+
+        # If the distance is higher than the current best match, skip this candidate
+        if distance > best_candidate_distance:
+            continue
+
+        # If the distance is lower than the current best match, update the best match
+        if distance < best_candidate_distance:
+            best_candidate = candidate
+            best_candidate_distance = distance
+            best_candidate_char_count_difference = char_count_difference
+            continue
+
+        # If the distance is equal, check the length difference to the split
+        if char_count_difference < best_candidate_char_count_difference:
+            best_candidate = candidate
+            best_candidate_distance = distance
+            best_candidate_char_count_difference = char_count_difference
+            continue
+
+    return best_candidate, best_candidate_distance, best_candidate_char_count_difference
+
+
+# Precompile regex patterns
+NON_WORD_PATTERN = re.compile(r"[^\w\s]")
+MULTI_WHITESPACE_PATTERN = re.compile(r"\s+")
+
+
 def sanitize_text(text: str) -> str:
-    """Sanitize the text for processing."""
-    # Make the text lowercase
-    text = text.lower()
-    # Replace non-word characters with spaces
-    text = re.sub(r"[^\w\s]", " ", text)
-    # Replace multiple whitespace characters with a single space
-    text = re.sub(r"\s+", " ", text)
-    # Remove leading and trailing whitespace
-    text = text.strip()
+    """
+    Sanitize the text for processing.
+    """
+    text = NON_WORD_PATTERN.sub(" ", text.lower())
+    text = MULTI_WHITESPACE_PATTERN.sub(" ", text).strip()
     return text
+
+
+# Precompile regex patterns for digit text sanitization
+WHITESPACE_BEFORE_NON_DIGIT_PATTERN = re.compile(r"\s+(\D)")
+WHITESPACE_AFTER_NON_DIGIT_PATTERN = re.compile(r"(\D)\s+")
 
 
 def sanitize_digit_text(text: str) -> str:
     """Sanitize text containing only digits."""
     # Remove whitespace before and after non-digit characters
-    text = re.sub(r"\s+(\D)", r"\1", text)
-    text = re.sub(r"(\D)\s+", r"\1", text)
-    # Remove multiple whitespace characters
-    text = re.sub(r"\s+", " ", text)
-    # Remove leading and trailing whitespace
-    text = text.strip()
+    text = WHITESPACE_BEFORE_NON_DIGIT_PATTERN.sub(r"\1", text)
+    text = WHITESPACE_AFTER_NON_DIGIT_PATTERN.sub(r"\1", text)
+    text = MULTI_WHITESPACE_PATTERN.sub(" ", text.strip())
     return text
 
 
-DISTANCE_THRESHOLD = 4  # Maximum distance for a match to be considered valid
+# Precompiled regex pattern to split into words, digits, and special characters
+SPLIT_REGEX = re.compile(r"\s+|\w+|\d+|[^\w\s\d]")
+
+# Maximum number of splits to generate
+MAX_SPLIT_COUNT = 10000
 
 
-def get_all_splits(token: str) -> list[list[str]]:
+def get_all_splits(tokens: list[str], max_splits: int = MAX_SPLIT_COUNT) -> list[list[str]]:
     """
-    Generate all possible split combinations for a token.
-    :param token: The string to split.
-    :return: A list of all possible split combinations.
+    Generate all possible split combinations for a token, retaining special characters and spaces as separate elements.
     """
-    # Split the token by non-word characters
-    splits = re.split(r"\W+", token)
-    if len(splits) == 1:
-        return [[token]]  # Only one way to split a single word
+    all_splits = set()
+    for token in tokens:
+        # Split the token into words, spaces, and special characters
+        splits = SPLIT_REGEX.findall(token)
+        if len(splits) == 1:
+            return [splits]  # Only one way to split a single element
 
-    all_splits = []
-    # Include the original unsplit token
-    all_splits.append([token])
+        n = len(splits)
+        # Include original token
+        all_splits.add((token,))
 
-    # Generate all combinations of indices to split at
-    for num_splits in range(1, len(splits)):
-        for split_indices in combinations(range(1, len(splits)), num_splits):
-            split_result = []
-            prev_index = 0
-            for index in split_indices:
-                split_result.append(" ".join(splits[prev_index:index]))
-                prev_index = index
-            split_result.append(" ".join(splits[prev_index:]))
-            all_splits.append(split_result)
+        # Generate all combinations of splits
+        for r in range(1, n):  # Generate combinations of indices
+            for indices in combinations(range(1, n), r):
+                result = []
+                start = 0
+                for index in indices:
+                    result.append("".join(splits[start:index]))  # Join segments up to the split point
+                    start = index
+                result.append("".join(splits[start:]))  # Add the last segment
+
+                # Add the split combination to the set
+                all_splits.add(tuple(result))
+
+                # Stop generating splits if the maximum count is reached
+                if len(all_splits) > max_splits:
+                    logger.warning(f"Exceeded maximum split count of {max_splits}")
+                    return list(all_splits)
 
     return all_splits
+
+
+# Patterns to skip processing for certain types of text
+SKIP_UUID_PATTERN = re.compile(r"^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$")
+SKIP_DIGITS_ONLY_PATTERN = re.compile(r"^[\W\s\d]+$")
+ALPHA_PATTERN = re.compile(r"[a-zA-Z]")
+
+# Precompiled regex patterns for email, URL, and domain text sanitization and extraction
+EMAIL_PREP_PATTERN = re.compile(r"[^a-zA-Z0-9._%+-@]")
+EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+URL_PREP_PATTERN = re.compile(r"[^a-zA-Z0-9.-:/]")
+URL_PATTERN = re.compile(r"https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+DOMAIN_PREP_PATTERN = re.compile(r"[^a-zA-Z0-9.-:/]")
+DOMAIN_PATTERN = re.compile(r"www\.[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+
+# Minimum length for a split to be considered for lookup
+LENGTH_LOOKUP_THRESHOLD = 3
+# Maximum distance for a match to be considered valid
+DISTANCE_THRESHOLD = 4
 
 
 def find_best_match(original: str, alternatives: list[str]) -> str:
     """Find the best match for a text token in the dictionary."""
 
+    # Skip processing if the original text is empty
+    if not original:
+        return original
+
+    # Skip processing if the original text does not contain any alphabetic characters
+    if SKIP_DIGITS_ONLY_PATTERN.match(original):
+        logger.info(f"Skipping digits only: {original}")
+        return sanitize_digit_text(original)
+
+    # Skip processing if the original text does not contain enough alphabetic characters
+    alpha_count = len(ALPHA_PATTERN.findall(original))
+    if alpha_count < LENGTH_LOOKUP_THRESHOLD:
+        logger.info(f"Skipping text with less than {LENGTH_LOOKUP_THRESHOLD} alphabetic characters: {original}")
+        return sanitize_digit_text(original)
+
+    # Skip processing if the original text is a UUID
+    if SKIP_UUID_PATTERN.match(original):
+        logger.info(f"Skipping UUID: {original}")
+        return original
+
     best_match_text = None
     lowest_total_distance = float("inf")
     char_count_difference = float("inf")  # Check this if the total distance is equal
 
-    all_splits = []
-    for alternative in alternatives:
-        alternative_splits = get_all_splits(alternative)
-        all_splits.extend(alternative_splits)
+    # Generate all possible split combinations for the original text
+    all_splits = get_all_splits(alternatives)
     logger.debug(f"Generated {len(all_splits)} split combinations for '{original}'")
 
     for split_combination in all_splits:
@@ -168,54 +255,58 @@ def find_best_match(original: str, alternatives: list[str]) -> str:
         split_candidates = []
         for split in split_combination:
             # Skip splits that consist of only digits or whitespace or punctuation
-            if re.match(r"^[\d\s\W]+$", split):
+            if SKIP_DIGITS_ONLY_PATTERN.match(split):
                 split_candidates.append(split)
-                split_distance_sum += 0  # Do not penalize digit splits
+                split_distance_sum += 0  # Do not penalize digits, whitespace, or punctuation
                 logger.debug(f"Skipping split '{split}' with only digits, whitespace, or punctuation")
                 continue
 
+            # Skip splits with mostly the same character
+            if len(set(split)) < len(split) / 2:
+                split_candidates.append(split)
+                split_distance_sum += len(split)  # Penalize same character splits
+                logger.debug(f"Skipping split '{split}' with mostly the same character")
+                continue
+
+            # If the text contains an email use that as the split
+            email_prep = EMAIL_PREP_PATTERN.sub("", split.lower())
+            email_match = EMAIL_PATTERN.search(email_prep)
+            if email_match:
+                email = email_match.group()
+                split_candidates.append(email)
+                split_distance_sum -= len(email)  # Reward emails
+                logger.debug(f"Skipping split '{split}' that is an email address")
+                continue
+
+            # If the text contains a URL use that as the split
+            url_prep = URL_PREP_PATTERN.sub("", split.lower())
+            url_match = URL_PATTERN.search(url_prep)
+            if url_match:
+                url = url_match.group()
+                split_candidates.append(url)
+                split_distance_sum -= len(url)  # Reward URLs
+                logger.debug(f"Skipping split '{split}' that is a URL")
+                continue
+
+            # If the text contains a domain use that as the split
+            domain_prep = DOMAIN_PREP_PATTERN.sub("", split.lower())
+            domain_match = DOMAIN_PATTERN.search(domain_prep)
+            if domain_match:
+                domain = domain_match.group()
+                split_candidates.append(domain)
+                split_distance_sum -= len(domain)  # Reward domains
+                logger.debug(f"Skipping split '{split}' that is a domain")
+                continue
+
             # Skip splits that are too short
-            if len(split) < 3:
+            if len(split) < LENGTH_LOOKUP_THRESHOLD:
                 split_candidates.append(split)
                 split_distance_sum += len(split)  # Penalize short splits
                 logger.debug(f"Skipping split '{split}' that is too short")
                 continue
 
-            # Find candidate words in the dictionary
-            candidates = get_candidate_words(split)
-            logger.debug(f"Found {len(candidates)} candidates for split '{split}'")
-
-            # Find the best match for the split in the dictionary, based on Levenshtein distance and length difference
-            best_candidate = None
-            best_candidate_distance = float("inf")
-            best_candidate_char_count_difference = float("inf")
-            for candidate in candidates:
-                # Calculate the Levenshtein distance between the split and the candidate in lowercase
-                distance = levenshtein(split, candidate.lower())
-                char_count_difference = abs(len(split) - len(candidate))
-
-                # If the distance is larger than the threshold, skip this candidate
-                if distance > DISTANCE_THRESHOLD:
-                    continue
-
-                # If the distance is higher than the current best match, skip this candidate
-                if distance > best_candidate_distance:
-                    continue
-
-                # If the distance is lower than the current best match, update the best match
-                if distance < best_candidate_distance:
-                    best_candidate = candidate
-                    best_candidate_distance = distance
-                    best_candidate_char_count_difference = char_count_difference
-                    continue
-
-                # If the distance is equal, check the length difference to the split
-                if char_count_difference < best_candidate_char_count_difference:
-                    best_candidate = candidate
-                    best_candidate_distance = distance
-                    best_candidate_char_count_difference = char_count_difference
-                    continue
-
+            # Sanitize the split for processing
+            best_candidate, best_candidate_distance, _ = get_best_candidate(sanitize_text(split))
             # If no candidate was found, add the split to the list and update the total distance
             if not best_candidate:
                 split_candidates.append(split)
@@ -229,7 +320,7 @@ def find_best_match(original: str, alternatives: list[str]) -> str:
             logger.debug(f"Found best candidate '{best_candidate}' for split '{split}'")
 
         # Calculate the total character count difference for the split combination
-        split_match_text = " ".join(split_candidates)
+        split_match_text = "".join(split_candidates)
         split_char_count_difference = abs(len(original) - len(split_match_text))
 
         # If the total distance is higher than the current best match, skip this split combination
@@ -257,62 +348,40 @@ def find_best_match(original: str, alternatives: list[str]) -> str:
 
 
 def find_ocr_mistakes(token: str) -> list[str]:
-    """Clean up OCR recognition mistakes in text."""
+    """
+    Clean up OCR recognition mistakes in text and provide alternatives.
+    """
+    # Use a set to avoid duplicates immediately
+    alternatives = {token}
 
-    # Apply substitutions to the text
-    alternatives = [token]
-
-    # Apply OCR correction map
     for pattern, substitution in OCR_CORRECTION_MAP.items():
-        # Search for the pattern in the token
-        match = re.search(pattern, token)
-        if not match:
-            continue
+        if re.search(pattern, token):
+            alternatives.add(re.sub(pattern, substitution, token))
 
-        # Replace the pattern with the substitution
-        mapped = re.sub(pattern, substitution, token)
-        alternatives.append(mapped)
-
-        # Recursively apply OCR correction to the new token
-        # children = find_ocr_mistakes(mapped)
-        # alternatives.extend(children)
-
-    return alternatives
+    return list(alternatives)
 
 
-MAX_CONCURRENT_WORKERS = 1
+MAX_CONCURRENT_WORKERS = 10
 
 
 def text_normalization(text: str) -> str:
+    """Normalize the text using a dictionary and fuzzy search."""
+
+    # Strip leading and trailing whitespace
+    text = text.strip()
+
     # Skip text normalization if the text is empty
     if not text:
         logger.debug(f"Skipping text normalization for empty text")
         return text
 
-    # Skip dictionary lookup if the text is only digits, whitespace, or punctuation
-    if re.match(r"^[\d\s\W]+$", text):
-        logger.debug(f"Skipping dictionary lookup for digit text: '{text}'")
-        return sanitize_digit_text(text)
-
-    # Correct common OCR mistakes (give a list of alternatives)
-    ocr_alternatives = find_ocr_mistakes(text)
-    logger.debug(f"Found {len(ocr_alternatives)} OCR alternatives for '{text}'")
-
-    # Sanitize the text for processing
-    ocr_alternatives = [sanitize_text(alt) for alt in ocr_alternatives]
-    logger.debug(f"Sanitized {len(ocr_alternatives)} OCR alternatives for '{text}'")
-
-    # Remove duplicates
-    ocr_alternatives = list(set(ocr_alternatives))
-    logger.debug(f"Removed duplicates, {len(ocr_alternatives)} alternatives left for '{text}'")
-
-    # Remove empty strings
-    ocr_alternatives = [alt for alt in ocr_alternatives if alt]
-    logger.debug(f"Removed empty strings, {len(ocr_alternatives)} alternatives left for '{text}'")
+    # Get OCR mistake alternatives
+    alternatives = find_ocr_mistakes(text)
+    logger.debug(f"Found {len(alternatives)} alternatives for '{text}'")
 
     # Perform fuzzy search on the dictionary
-    normalized_text = find_best_match(text, ocr_alternatives)
-    logger.debug(f"Found best match for '{text}': '{normalized_text}'")
+    normalized_text = find_best_match(text, alternatives)
+    logger.info(f"Normalized '{text}' to '{normalized_text}'")
 
     return normalized_text
 
@@ -364,7 +433,12 @@ def main(input_path: str, output_path: str = tempfile.mkdtemp(), clean: bool = F
     logger.info(f"Loaded {len(input_metadata)} metadata files from {input_path}")
 
     # Process metadata files
-    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_WORKERS) as executor:
+    # for metadata_file in input_metadata:
+    #     process_metadata(metadata_file, output_path)
+
+    # Process metadata files concurrently
+    max_workers = min(MAX_CONCURRENT_WORKERS, len(input_metadata))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for metadata_file in input_metadata:
             executor.submit(process_metadata, metadata_file, output_path)
 
