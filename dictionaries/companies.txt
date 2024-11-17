@@ -1,53 +1,68 @@
+# Varia
+AllFin
+Ets. Garciel
+
+# Online shops
 Media Markt
 bol.com
 Coolblue
+Azerty
+RAD
+Decathlon
+Zalando
+
+# Restaurants / Bars
+Vlaamse Overheid
+Ellips restaurant
+DAB Ellipsgebouw
+Ellipsgebouw
+Belpaire restaurant
+Clubhuis
+Grand Bazaar
+'t Voorhuys
+Dominos
+Pizza Hut
+McDonalds
+
+# Tech companies
+Azure
+Microsoft
+Microsoft Azure
+Amazon Web Services
+AWS
+Google Cloud
+Google Cloud Platform
+GCP
+OpenAI
+Apple
+
+# Supermarkets
 Colruyt
 Carrefour
 Delhaize
-Delhaize Ekeren
-Delhaize Deurne
-Delhaize Merksem
-Delhaize Schoten
-Nivea
-L'Oréal
-Unilever
-Coca-Cola
-Pepsi
-Apple
-Samsung
-Microsoft
-Sony
-LG
-Amazon
-Amazon Web Services
-AWS
-Google
-Google EMEA
-OpenAI
-Azerty
-Microsoft Azure
-Azure
-AllFin
-ING
-KBC
-Belfius
-BNP Paribas Fortis
-Bpost
+Aldi
+
+# Telecom
 Proximus
 Telenet
 Orange
-Grand Bazaar
-IKEA
-RAD
-WORLDLINE
-DAB Ellipsgebouw
-Clubhuis
+Scarlet
+Mobile Vikings
+
+# Carwashes / Parkings / Mobility
 ANAC Carwash
 NV interparking sa
+B-parking
+Q-Park
+Poppy
+NMBS
+De Lijn
+
+# Gas stations
 Q8
 Shell
 Esso
 Texaco
 Total
 Lukoil
-Vlaamse Overheid
+

@@ -58,7 +58,8 @@ DICTIONARIES = {}
 for lang in LANGUAGES:
     dictionary_file = os.path.join(DICTIONARY_PATH, f"{lang}.txt")
     with open(dictionary_file, "r") as f:
-        DICTIONARIES[lang] = set(f.read().splitlines())
+        # Filter out empty lines and comments
+        dictionary = {line.strip() for line in f if line.strip() and not line.startswith("#")}
     logger.info(f"Loaded {len(DICTIONARIES[lang])} words in dictionary for language {lang}")
 
 

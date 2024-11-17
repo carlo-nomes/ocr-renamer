@@ -1,0 +1,82 @@
+# Common Bill terms
+factuur
+invoice
+rekening
+bill
+receipt
+order
+bestelling
+order
+orderbevestiging
+ticket
+bon
+voucher
+coupon
+kassabon
+
+# Common VAT terms
+vat
+tax
+btw
+
+# Common date terms
+datum
+date
+factuurdatum
+invoice date
+periode
+period
+vervaldatum
+due date
+betaaldatum
+payment date
+leverdatum
+delivery date
+aankoopdatum
+purchase date
+
+# Common total terms
+totaal
+total
+totaalrekening
+tegoed
+credit
+subtotaal
+subtotal
+
+# Common payment terms
+betaald
+paid
+betaling
+payment
+openstaand
+outstanding
+saldo
+balance
+creditnota
+credit note
+
+# Common Subscription terms
+abonnement
+subscription
+contract
+overeenkomst
+agreement
+service
+dienst
+
+# Common currency terms
+euro
+eur
+usd
+dollar
+
+# Extra terms
+wifi
+restaurant
+
+# Personal terms
+carlo
+nomes
+secretaris
+meyerlei

@@ -8,17 +8,18 @@ from datetime import datetime
 from collections import Counter
 import re
 import argparse
+from Levenshtein import distance as levenshtein
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(levelname)s: %(message)s")
 logger = logging.getLogger()
 
 # Define the patterns to match different date formats
 DATE_PATTERNS = [
-    r"\b\d{1,4}([./\-_\\ ])\d{1,2}\1\d{1,4}\b",  # Matches structured dates with separators
-    r"\b[a-zA-Z]+[, ]+\d{1,4}[, ]+\d{1,4}\b",  # Matches dates with month names at the beginning
-    r"\b\d{1,4}[, ]+[a-zA-Z]+[, ]+\d{1,4}\b",  # Matches dates with month names in the middle
-    r"\b\d{1,4}[, ]+\d{1,4}[, ]+[a-zA-Z]+\b",  # Matches dates with month names at the end
+    re.compile(r"\b\d{1,4}([./\-_\\ ])\d{1,2}\1\d{1,4}\b"),  # Matches structured dates with separators
+    re.compile(r"\b[a-zA-Z]+[, ]+\d{1,4}[, ]+\d{1,4}\b"),  # Matches dates with month names at the beginning
+    re.compile(r"\b\d{1,4}[, ]+[a-zA-Z]+[, ]+\d{1,4}\b"),  # Matches dates with month names in the middle
+    re.compile(r"\b\d{1,4}[, ]+\d{1,4}[, ]+[a-zA-Z]+\b"),  # Matches dates with month names at the end
 ]
 
 # List of formats to try for parsing dates in descending order of probability
@@ -47,9 +48,48 @@ DATE_FORMATS = [
 ]
 CENTURY_ADJUSTMENT = 2000
 
+# Load dictionaries for each language
+DICTIONARY_PATH = f"{os.path.dirname(__file__)}/dictionaries"
+
+# Dictionary of common company names
+COMPANIES_DICTIONARY = []
+dictionary_file = os.path.join(DICTIONARY_PATH, "companies.txt")
+with open(dictionary_file, "r") as f:
+    # Filter out comments and empty lines
+    COMPANIES_DICTIONARY = [line.strip() for line in f.readlines() if not line.startswith("#") and line.strip()]
+logger.debug(f"Loaded {len(COMPANIES_DICTIONARY)} company names from '{dictionary_file}'")
+
+DISTANCE_THRESHOLD = 2
+
+
+def search_company_name(text: str) -> str | None:
+    for company in COMPANIES_DICTIONARY:
+        clean = company.lower().replace(" ", "")
+        clean_text = text.lower().replace(" ", "")
+        distance = levenshtein(clean, clean_text)
+        if distance < DISTANCE_THRESHOLD:
+            return company
+    return None
+
+
+# List of common words to exclude from company names (e.g., stopwords)
+STOPWORDS = []
+dictionary_file = os.path.join(DICTIONARY_PATH, "stopwords.txt")
+with open(dictionary_file, "r") as f:
+    # Filter out comments and empty lines
+    STOPWORDS = [line.strip() for line in f.readlines() if not line.startswith("#") and line.strip()]
+logger.debug(f"Loaded {len(STOPWORDS)} stopwords from '{dictionary_file}'")
+
+
+def contains_stopword(text: str) -> bool:
+    for word in STOPWORDS:
+        matched = re.search(rf"{word}", text, re.IGNORECASE)
+        if matched:
+            return True
+    return False
+
 
 def parse_date(date_str: str) -> datetime | None:
-    logger.debug(f"Parsing date string: '{date_str}'")
     parsed_date = None
 
     # Normalize the date string for easier parsing
@@ -96,24 +136,16 @@ def find_transaction_date(boxes: list[dict]) -> datetime | None:
 
     # Iterate over the boxes to find the transaction date
     for box in boxes:
-        text = box["text"]
-        logger.debug(f"Checking text '{text}' for a date")
-
         for pattern in DATE_PATTERNS:
-            match = re.search(pattern, text)
+            match = pattern.search(box["text"])
             # If no match is found, try the next pattern
             if not match:
-                logger.debug(f"No match found for pattern '{pattern}' in '{text}'")
                 continue
 
             # Attempt to parse the date, try the next pattern if parsing fails
-            date_str = match.group()
-            parsed_date = parse_date(date_str)
+            parsed_date = parse_date(match.group())
             if not parsed_date:
-                logger.debug(f"Failed to parse date from '{date_str}'")
                 continue
-
-            logger.debug(f"Found date '{parsed_date}' in '{text}'")
             possible_transaction_dates.append(parsed_date)
 
     # Return None if no valid date is found
@@ -154,149 +186,10 @@ def calculate_median_box_area(boxes: list[dict]) -> float:
     return sorted(box_areas)[len(box_areas) // 2]
 
 
-# Normalize the text in the OCR boxes for matching
-def normalize_boxes(boxes: list[dict]) -> list[dict]:
-    normalize_boxes = []
-    for box in boxes:
-        # Create a copy of the box to avoid modifying the original
-        normalized_box = box.copy()
-
-        # Normalize the text term by term
-        terms = re.findall(r"\b\w+\b", normalized_box["text"])
-        normalized_terms = []
-        for term in terms:
-            # Convert term to lowercase
-            normalized_term = term.lower()
-
-            # Do not further normalize email addresses, URLs, or domain names
-            if re.match(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", normalized_term):
-                normalized_terms.append(normalized_term)
-                continue
-            if re.match(r"https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", normalized_term):
-                normalized_terms.append(normalized_term)
-                continue
-            if re.match(r"www\.[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", normalized_term):
-                normalized_terms.append(normalized_term)
-                continue
-            if re.match(r"[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/[a-zA-Z0-9.-]+", normalized_term):
-                normalized_terms.append(normalized_term)
-                continue
-
-            # Remove non-alphanumeric characters
-            normalized_term = re.sub(r"[^a-z0-9 ]", "", normalized_term)
-            # Remove leading/trailing spaces
-            normalized_term = normalized_term.strip()
-
-            # Skip terms with less than 3 characters
-            if len(normalized_term) < 3:
-                continue
-
-            # Skip terms containing only digits and separators
-            if re.match(r"^\d+[\s.,-]*$", normalized_term):
-                continue
-
-            # Replace multiple spaces with a single space
-            normalized_term = re.sub(r"\s+", " ", normalized_term)
-            normalized_terms.append(normalized_term)
-
-        # Overwrite the text with the normalized version
-        normalized_box["text"] = " ".join(normalized_terms)
-        normalize_boxes.append(normalized_box)
-
-    return normalize_boxes
-
-
-# List of common words to exclude from company names (e.g., stopwords)
-STOPWORDS = [
-    # Common Bill terms
-    "factuur",
-    "invoice",
-    "rekening",
-    "bill",
-    "receipt",
-    "order",
-    "bestelling",
-    "order",
-    "orderbevestiging",
-    "ticket",
-    "bon",
-    "voucher",
-    "coupon",
-    "kassabon",
-    # Common VAT terms
-    "vat",
-    "tax",
-    "btw",
-    # Common date terms
-    "datum",
-    "date",
-    "factuurdatum",
-    "invoice date",
-    "periode",
-    "period",
-    "vervaldatum",
-    "due date",
-    "betaaldatum",
-    "payment date",
-    "leverdatum",
-    "delivery date",
-    "aankoopdatum",
-    "purchase date",
-    # Common total terms
-    "totaal",
-    "total",
-    "totaalrekening",
-    "tegoed",
-    "credit",
-    "subtotaal",
-    "subtotal",
-    # Common payment terms
-    "betaald",
-    "paid",
-    "betaling",
-    "payment",
-    "openstaand",
-    "outstanding",
-    "saldo",
-    "balance",
-    "creditnota",
-    "credit note",
-    # Common Subscription terms
-    "abonnement",
-    "subscription",
-    "contract",
-    "overeenkomst",
-    "agreement",
-    "service",
-    "dienst",
-    # Common currency terms
-    "euro",
-    "eur",
-    "usd",
-    "dollar",
-    # Extra terms
-    "wifi",
-    "restaurant",
-    # Personal terms
-    "carlo",
-    "nomes",
-    "secretaris",
-    "meyerlei",
-]
-
-
-def contains_stopword(text: str) -> bool:
-    for word in STOPWORDS:
-        matched = re.search(rf"{word}", text, re.IGNORECASE)
-        if matched:
-            return True
-    return False
-
-
 def filter_boxes(boxes: list[dict]) -> list[dict]:
     filtered_boxes = []
     for box in boxes:
-        text = box["text"]
+        text = box["normalized_text"]
         confidence = box["confidence"]
 
         # Skip boxes with low confidence
@@ -311,6 +204,10 @@ def filter_boxes(boxes: list[dict]) -> list[dict]:
         if contains_stopword(text):
             continue
 
+        # Skip boxes containing only numbers
+        if text.isdigit():
+            continue
+
         filtered_boxes.append(box)
 
     return filtered_boxes
@@ -318,12 +215,20 @@ def filter_boxes(boxes: list[dict]) -> list[dict]:
 
 MIN_TERM_LENGTH = 3
 
+# Precompiled regex patterns for email, URL, and domain text sanitization and extraction
+EMAIL_PREP_PATTERN = re.compile(r"[^a-zA-Z0-9._%+-@]")
+EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+URL_PREP_PATTERN = re.compile(r"[^a-zA-Z0-9.-:/]")
+URL_PATTERN = re.compile(r"https?://[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+DOMAIN_PREP_PATTERN = re.compile(r"[^a-zA-Z0-9.-:/]")
+DOMAIN_PATTERN = re.compile(r"www\.[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
+
 
 def compute_weighted_terms(boxes: list[dict], median_area: float) -> list[dict]:
     term_counter = Counter()
 
     for box in boxes:
-        text = box["text"]
+        text = box["normalized_text"]
         confidence = box["confidence"]
         box_area = calculate_box_area(box["box"])
 
@@ -333,6 +238,38 @@ def compute_weighted_terms(boxes: list[dict], median_area: float) -> list[dict]:
         # Increase the weight based on its relation to the median box area
         weight *= box_area / median_area
 
+        # Check if the box contains an email address
+        email_prep = re.sub(EMAIL_PREP_PATTERN, "", text)
+        email_match = re.match(EMAIL_PATTERN, email_prep)
+        if email_match:
+            logger.debug(f"Found email address '{email_match.group()}' in box '{text}'")
+            # Get the domain part of the email address
+            domain = email_match.group().split("@")[1].split(".")[0]
+            term_counter[domain] += weight * 2
+
+        # Check if the box contains a URL
+        url_prep = re.sub(URL_PREP_PATTERN, "", text)
+        url_match = re.match(URL_PATTERN, url_prep)
+        if url_match:
+            logger.debug(f"Found URL '{url_match.group()}' in box '{text}'")
+            # Get the domain part of the URL
+            domain = url_match.group().split("//")[1].split(".")[0]
+            term_counter[domain] += weight * 2
+
+        # Check if the box contains a domain name
+        domain_prep = re.sub(DOMAIN_PREP_PATTERN, "", text)
+        domain_match = re.match(DOMAIN_PATTERN, domain_prep)
+        if domain_match:
+            logger.debug(f"Found domain name '{domain_match.group()}' in box '{text}'")
+            domain = domain_match.group().split(".")[1]
+            term_counter[domain] += weight * 2
+
+        # Check if the box contains a known company name
+        company_name = search_company_name(text)
+        if company_name:
+            logger.debug(f"Found company name '{company_name}' in box '{text}'")
+            term_counter[company_name] += weight * 5
+
         # Split the text into terms
         terms = re.findall(r"\b\w+\b", text)
 
@@ -340,27 +277,10 @@ def compute_weighted_terms(boxes: list[dict], median_area: float) -> list[dict]:
         terms = [term for term in terms if len(term) >= MIN_TERM_LENGTH]
 
         for term in terms:
-            # Check if the term is an email address or url, normalize it and boost its weight
-            email_match = re.match(r"[a-zA-Z0-9._%+-]+@([a-zA-Z0-9.-]+)\.[a-zA-Z]{2,}", term)
-            if email_match:
-                weight *= 2
-                term = email_match.group(1)
-                term = re.sub(r"[^a-z0-9]", " ", term)
-                term = re.sub(r"\s+", " ", term)
-            url_match = re.match(r"https?://([a-zA-Z0-9.-]+)\.[a-zA-Z]{2,}", term)
-            if url_match:
-                weight *= 2
-                term = url_match.group(1)
-                term = re.sub(r"[^a-z0-9]", " ", term)
-                term = re.sub(r"\s+", " ", term)
-
-            # Increase the weight of the term
+            # Increase the weight of the term for each occurrence
             term_counter[term] += weight
 
     return term_counter
-
-
-SENTENCE_THRESHOLD = 5
 
 
 # Function to find company name in OCR data
@@ -368,11 +288,8 @@ def find_company_name(boxes: list[dict]) -> str | None:
     # Calculate the median box area
     median_box_area = calculate_median_box_area(boxes)
 
-    # Normalize the boxes for matching
-    normalized_boxes = normalize_boxes(boxes)
-
     # Filter out irrelevant boxes
-    filtered_boxes = filter_boxes(normalized_boxes)
+    filtered_boxes = filter_boxes(boxes)
     if not filtered_boxes:
         return None
 
@@ -403,9 +320,7 @@ def normalize_company_name(company_name: str) -> str:
 
 
 # Function to rename and copy the image file based on extracted company and date
-def get_target_filename(image_path: str, company_name: str | None, transaction_date: datetime | None, target_dir: str) -> str:
-    # Extract the original file extension
-    ext = os.path.splitext(image_path)[1]
+def get_target_filename(company_name: str | None, transaction_date: datetime | None, target_dir: str) -> str:
 
     # If company name is found, normalize it
     normalized_company_name = normalize_company_name(company_name) if company_name else "unknown_company"
@@ -413,65 +328,15 @@ def get_target_filename(image_path: str, company_name: str | None, transaction_d
     # If transaction date is found, format it as YYYY_MM_DD
     formatted_date = transaction_date.strftime("%Y_%m_%d") if transaction_date else "unknown_date"
 
-    # Add a timestamp to the filename to ensure uniqueness
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
     # Generate the new filename with the format: {date}-{company}-{timestamp}{ext}
-    new_filename = f"{formatted_date}-{normalized_company_name}-{timestamp}{ext}"
+    # new_filename = f"{formatted_date}-{normalized_company_name}-{datetime.now().strftime("%Y%m%d_%H%M%S")}{ext}"
+    new_filename = f"{formatted_date}-{normalized_company_name}.pdf"
 
     # Ensure the target directory exists
     os.makedirs(target_dir, exist_ok=True)
 
     # Return the full path to the new filename
     return os.path.join(target_dir, new_filename)
-
-
-# List of common OCR errors to correct
-COMMON_ERRORS_ONE_WAY = {
-    "|": "I",
-    "|": "1",
-    "|": "l",
-}
-COMMON_ERRORS_TWO_WAY = {
-    "I": "1",
-    "l": "1",
-    "o": "0",
-    "O": "0",
-    "s": "5",
-    "S": "5",
-    "Z": "2",
-    "B": "8",
-}
-
-
-def preprocess_boxes(boxes: list[dict]) -> list[dict]:
-    # Filter out boxes with empty text
-    filtered_boxes = [box for box in boxes if box.get("text")]
-
-    # Correct boxes with common OCR errors (e.g., "I" misread as "|")
-    one_way_corrected_boxes = []
-    for box in filtered_boxes:
-        text = box["text"]
-        for error, correction in COMMON_ERRORS_ONE_WAY.items():
-            corrected_text = text.replace(error, correction)
-            if corrected_text != text:
-                corrected_box = box.copy()
-                corrected_box["text"] = corrected_text
-                one_way_corrected_boxes.append(corrected_box)
-
-    # Duplicate boxes with common OCR errors (e.g., "1" misread as "I" and vice versa)
-    two_way_corrected_boxes = []
-    for box in filtered_boxes:
-        text = box["text"]
-        for error, correction in COMMON_ERRORS_TWO_WAY.items():
-            corrected_text = text.replace(error, correction)
-            if corrected_text != text:
-                corrected_box = box.copy()
-                corrected_box["text"] = corrected_text
-                two_way_corrected_boxes.append(corrected_box)
-
-    # Combine all corrected boxes and return the result
-    return filtered_boxes + one_way_corrected_boxes + two_way_corrected_boxes
 
 
 # Function to process all metadata files and rename the corresponding images
@@ -499,14 +364,13 @@ def process_metadata(metadata_dir: str, target_dir: str, clean: bool = False) ->
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
-        # Get the image file referenced in the metadata
-        image_path = metadata.get("original_image")
-        if not image_path:
-            logger.warning(f"No 'original_image' key found in '{metadata_path}'")
-            continue
-        if not os.path.exists(image_path):
-            logger.warning(f"Image file '{image_path}' not found")
-            continue
+        # Get the original PDF image file path from the metadata
+        pdf_path = metadata["original_metadata"]["pdf_path"]
+        if not pdf_path:
+            raise ValueError(f"No 'pdf_path' key found in '{metadata_path}'")
+        # Ensure the PDF file exists
+        if not os.path.isfile(pdf_path):
+            raise FileNotFoundError(f"PDF file '{pdf_path}' not found")
 
         # Type check the 'boxes' key in the metadata
         boxes = metadata.get("boxes")
@@ -514,19 +378,17 @@ def process_metadata(metadata_dir: str, target_dir: str, clean: bool = False) ->
         assert isinstance(boxes, list), f"Invalid 'boxes' data type in '{metadata_path}'"
         assert all(isinstance(box, dict) for box in boxes), f"Invalid 'boxes' data type in '{metadata_path}'"
 
-        # Preprocess the OCR boxes to correct common errors
-        cleaned_boxes = preprocess_boxes(boxes)
-
         # Find the company name and transaction date from the cleaned boxes
-        company_name = find_company_name(cleaned_boxes)
-        transaction_date = find_transaction_date(cleaned_boxes)
+        company_name = find_company_name(boxes)
+        transaction_date = find_transaction_date(boxes)
 
         # Generate the new target filename based on company name and date
-        target_filename = get_target_filename(image_path, company_name, transaction_date, target_dir)
+        target_filename = get_target_filename(company_name, transaction_date, target_dir)
 
         # Copy the image file to the target directory with the new filename
-        shutil.copy(image_path, target_filename)
-        logger.info(f"Image file '{image_path}' copied to '{target_filename}'")
+
+        shutil.copy(pdf_path, target_filename)
+        logger.info(f"Copied '{pdf_path}' to '{target_filename}'")
 
 
 if __name__ == "__main__":

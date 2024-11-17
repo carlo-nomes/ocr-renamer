@@ -139,7 +139,6 @@ if __name__ == "__main__":
 
     # Set up arguments for command line usage
     parser = argparse.ArgumentParser(description="Convert PDF files to images.")
-    # /Users/carlonomes/Library/CloudStorage/GoogleDrive-nomes.carlo@gmail.com/My\ Drive/ZAP.DEV/Aankoop
     parser.add_argument("input_path", help="Path to the PDF file or directory containing PDF files.")
     parser.add_argument("--output_dir", help="Directory to save the images. Default is a temporary directory.")
     parser.add_argument("--clean", action="store_true", help="Clean the temporary directory after conversion.")
