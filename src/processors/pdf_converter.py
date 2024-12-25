@@ -1,17 +1,16 @@
 import logging
 import os
+from pathlib import Path
 import tempfile
+from PIL import Image
 from typing import List
 
 from pdf2image import convert_from_path
 
-from src.utils.file_io import list_files_in_directory
+from src.utils.file_io import empty_directory, list_files_in_directory
 
-# Configure logging
 logger = logging.getLogger(__name__)
 
-# Constants
-DEFAULT_DPI = 300
 DEFAULT_OUTPUT_FORMAT = "JPEG"
 
 
@@ -20,75 +19,71 @@ class PDFConverter:
     A class for preprocessing PDF files to run OCR on them.
     """
 
-    def __init__(self, dpi: int = DEFAULT_DPI, output_format: str = DEFAULT_OUTPUT_FORMAT) -> None:
+    def __init__(self, output_dir: Path = None, output_format: str = DEFAULT_OUTPUT_FORMAT, overwrite: bool = False) -> None:
         """
-        Constructor for the PDFConverter class.
+        Initializes the PDFConverter class.
+        """
+        self.output_dir = output_dir if output_dir else Path(tempfile.mkdtemp())
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        if not self.output_dir.is_dir() or not os.access(self.output_dir, os.W_OK):
+            raise PermissionError(f"Output directory is not writable: {self.output_dir}")
 
-        :param dpi: The DPI to use for the conversion.
-        :param output_format: The output format to use for the conversion.
-        """
-        self.dpi = dpi
         self.output_format = output_format
+        self.overwrite = overwrite
 
-    def convert(
-        self,
-        pdf_path: str,
-        output_dir: str | None = None,
-        clear_output=True,
-        recursive: bool = False,
-        single_file: bool = True,
-    ) -> List[str]:
+    def combine_images(self, images: List[Image.Image]) -> Image.Image:
         """
-        Converts a PDF file to images.
+        Combine a list of images into a single long image.
+        """
+        widths, heights = zip(*(i.size for i in images))
+        total_width = max(widths)
+        total_height = sum(heights)
 
-        :param pdf_path: The path to the PDF file or directory containing PDF files.
-        :param output_dir: The output directory for the converted images, defaults to a temporary directory.
-        :param clear_output: Whether to clear the output directory before converting the PDF files.
-        :param recursive: Whether to search for PDF files recursively in the directory.
-        :param single_file: Whether to save all pages in a single image or create separate images for each page.
-        :return: A list of paths to the converted images.
-        """
-        # Get the paths to the PDF files, either a single file or all files in a directory
-        if os.path.isdir(pdf_path):
-            pdf_paths = list_files_in_directory(pdf_path, recursive, extensions=[".pdf"])
-        elif pdf_path.endswith(".pdf"):
-            logger.debug(f"Converting PDF file: {pdf_path}")
+        combined_image = Image.new("RGB", (total_width, total_height))
+        y_offset = 0
+        for image in images:
+            combined_image.paste(image, (0, y_offset))
+            y_offset += image.size[1]
+
+        return combined_image
+
+    def convert(self, pdf_path: Path, recursive: bool = False, single_image: bool = True) -> list[Path]:
+        pdf_paths = []
+        if pdf_path.is_dir():
+            pdf_paths = list_files_in_directory(pdf_path, recursive=recursive, extensions=[".pdf"])
+        elif pdf_path.is_file() and pdf_path.suffix == ".pdf":
             pdf_paths = [pdf_path]
         else:
-            logger.error(f"Invalid file extension for PDF file: {pdf_path}")
-            raise ValueError(f"Invalid file extension for PDF file: {pdf_path}")
+            raise FileNotFoundError(f"PDF file not found: {pdf_path}")
 
-        # Check if any PDF files were found
-        if not pdf_paths or len(pdf_paths) == 0:
-            logger.error(f"No PDF files found in directory: {pdf_path}")
-            raise ValueError(f"No PDF files found in directory: {pdf_path}")
-
-        # Prepare the output directory
-        if output_dir is None:
-            output_dir = tempfile.mkdtemp()
-            logger.info(f"Using temporary directory for converted images: {output_dir}")
-        os.makedirs(output_dir, exist_ok=True)
-        if clear_output:
-            files = list_files_in_directory(output_dir)
-            for file in files:
-                os.remove(file)
-            logger.info(f"Cleared output directory: {output_dir}")
-
-        result = []
-        for pdf_path in pdf_paths:
-            pdf_name = os.path.basename(pdf_path)
-            pdf_name = pdf_name.split(".")[0]
-            output_dir_pdf = os.path.join(output_dir, pdf_name)
+        results = []
+        for pdf in pdf_paths:
+            output_dir = self.output_dir / pdf.stem
+            # If overwrite is enabled, empty the directory
+            if self.overwrite:
+                empty_directory(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)  # Ensure directory exists
 
             # Convert the PDF file to images
-            images = convert_from_path(
-                pdf_path,
-                output_folder=output_dir_pdf,
-                single_file=single_file,
-                dpi=self.dpi,
-                fmt=self.output_format,
-            )
-            result.extend(images)
-            logger.debug(f'Converted PDF file "{pdf_path}" to {len(images)} images in "{output_dir_pdf}".')
+            images = convert_from_path(str(pdf), fmt=self.output_format)
 
-        return result
+            # Save each image and collect paths
+            if not single_image:
+                image_paths = []
+                for i, image in enumerate(images):
+                    image_path = output_dir / f"{pdf.stem}-{i+1}.{self.output_format.lower()}"
+                    image.save(image_path, self.output_format)
+                    image_paths.append(image_path)
+
+                results.extend(image_paths)
+                logger.debug(f"Converted {pdf} to {len(images)} images in {output_dir}.")
+                continue
+
+            # Combine images into a single file
+            combined_image = self.combine_images(images)
+            combined_image_path = output_dir / f"{pdf.stem}.{self.output_format.lower()}"
+            combined_image.save(combined_image_path, self.output_format)
+            results.append(combined_image_path)
+            logger.debug(f"Converted {pdf} to a single image in {output_dir}.")
+
+        return results
