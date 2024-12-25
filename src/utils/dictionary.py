@@ -37,7 +37,18 @@ class DictionaryManager:
         words = read_lines(dictionary_path)
         grouped = defaultdict(list)
         for word in words:
-            grouped[len(word)].append(word)
+            cleaned_word = word.strip().lower()
+
+            # Skip empty lines
+            if not cleaned_word:
+                continue
+
+            # Skip comments
+            if cleaned_word.startswith("#"):
+                continue
+
+            # Group words by length
+            grouped[len(cleaned_word)].append(cleaned_word)
 
         logger.info(f"Loaded {len(words)} words from {dictionary_path}")
         return dict(grouped)
@@ -52,7 +63,7 @@ class DictionaryManager:
         logger.info(f"Added dictionary for '{key}'")
 
     @lru_cache()
-    def get_ranked_candidates(self, token: str, key: str) -> list[str]:
+    def get_ranked_candidates(self, key: str, token: str) -> list[str]:
         """
         Fetch candidate terms from the dictionary based on the token length.
         :param token: The token to search for.
