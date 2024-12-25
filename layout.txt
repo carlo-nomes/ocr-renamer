@@ -1,0 +1,47 @@
+ocr_project/
+├── src/                         # Core application logic
+│   ├── __init__.py              # Initialize the package
+│   ├── processors/              # OCR-related processing modules
+│   │   ├── __init__.py
+│   │   ├── easy_ocr.py          # EasyOCR-specific processing
+│   │   ├── spacy.py             # SpaCy-specific processing
+│   │   ├── tesseract.py         # Tesseract-specific processing
+│   │   ├── metadata.py          # Metadata handling and parsing
+│   │   ├── pdf_converter.py     # PDF to image/text conversion
+│   │   └── post_processor.py    # Post-processing for OCR results
+│   ├── utils/                   # Shared utility functions
+│   │   ├── __init__.py
+│   │   ├── file_io.py           # File input/output operations
+│   │   ├── regex_utils.py       # Precompiled regex patterns and helpers
+│   │   ├── string_utils.py      # String manipulation utilities
+│   │   ├── dictionary.py        # Dictionary and lookup handling
+│   │   └── logging_setup.py     # Logging configuration
+│   ├── constants.py             # Constants shared across modules
+│   └── main.py                  # Entry point for the application
+├── tests/                       # Test suite for the application
+│   ├── __init__.py
+│   ├── test_processors.py       # Unit tests for processors
+│   ├── test_utils.py            # Unit tests for utilities
+│   ├── test_dictionary.py       # Specific tests for dictionary handling
+│   ├── test_end_to_end.py       # End-to-end tests
+│   └── fixtures/                # Sample input data and setup files
+│       ├── sample_metadata.json
+│       ├── test_image.jpg
+│       └── test_pdf.pdf
+├── data/                        # Data resources
+│   ├── dictionaries/            # Dictionaries for language processing
+│   │   ├── companies.txt
+│   │   ├── en.txt
+│   │   ├── nl.txt
+│   │   └── stopwords.txt
+│   ├── ocr_substitutions.csv    # Substitution map for OCR corrections
+│   └── test_data/               # Sample data for testing
+├── scripts/                     # Command-line scripts
+│   ├── full_run.sh              # Script for running the entire pipeline
+│   ├── rename_images.py         # Image renaming utility
+│   └── setup_environment.sh     # Setup scripts (e.g., virtualenv, dependencies)
+├── requirements.txt             # Python dependencies
+├── README.md                    # Project documentation
+├── setup.py                     # Installation script for packaging
+├── .gitignore                   # Git ignore file
+└── .pre-commit-config.yaml      # Pre-commit hooks for linting/formatting
